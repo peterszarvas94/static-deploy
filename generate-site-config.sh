@@ -66,20 +66,29 @@ check_prerequisites() {
 }
 
 show_help() {
-    echo "Usage: $0 [FLAG] <domain>"
+    echo "Usage: $0 [ACTION] [--domain=example.com]"
     echo ""
-    echo "Flags:"
-    echo "  --conf     Generate config file only"
-    echo "  --copy     Create directory and copy config to nginx"
-    echo "  --enable   Enable site in nginx"
-    echo "  --ssl      Setup SSL certificate with certbot"
-    echo "  --all      Run all steps (conf + copy + enable + ssl)"
-    echo "  --help     Show this help"
+    echo "Actions:"
+    echo "  --conf,    -c    Generate HTTP config file only"
+    echo "  --copy,    -p    Create directory and copy config to nginx"
+    echo "  --enable,  -e    Enable site in nginx"
+    echo "  --ssl,     -s    Setup SSL certificate with certbot"
+    echo "  --all,     -a    Run all steps (conf + copy + enable + ssl)"
+    echo "  --check,   -k    Check domain health (DNS, HTTP, HTTPS, SSL)"
+    echo "  --remove,  -r    Remove site completely (webroot + config + SSL cert)"
+    echo "  --help,    -h    Show this help"
+    echo ""
+    echo "Domain Options:"
+    echo "  --domain=example.com, -d example.com   Specify domain to work with"
+    echo "  (if not provided, you will be prompted to enter it)"
     echo ""
     echo "Examples:"
-    echo "  $0 --all example.com"
-    echo "  $0 --ssl example.com"
-    echo "  $0 --conf example.com"
+    echo "  $0 --all --domain=example.com     # Setup complete site"
+    echo "  $0 -a -d example.com              # Same as above (short flags)"
+    echo "  $0 --check --domain=example.com   # Verify site is working"
+    echo "  $0 -k -d example.com              # Same as above (short flags)"
+    echo "  $0 --all                          # Will prompt for domain"
+    echo "  $0 -a                             # Same as above (short flag)"
     echo ""
     echo "Prerequisites:"
     echo "  - Domain must point to this server's IP"
@@ -328,20 +337,385 @@ setup_ssl() {
     fi
     
     log_success "$domain SSL setup complete and working!"
+    
+    echo ""
+    echo "🎉 SSL enabled for $domain!"
+    echo ""
+    echo "📁 Your website files go here:"
+    echo "   Webroot: /var/www/$domain/"
+    echo ""
+    echo "   Quick test:"
+    echo "   sudo bash -c 'echo \"<h1>Hello $domain! 🚀</h1>\" > /var/www/$domain/index.html'"
+    echo ""
+    echo "   Upload files:"
+    echo "   sudo cp -r /path/to/your/website/* /var/www/$domain/"
+    echo "   sudo chown -R www-data:www-data /var/www/$domain/"
+    echo "   sudo chmod -R 755 /var/www/$domain/"
+    echo ""
+    echo "🌐 Visit: https://$domain"
+    echo ""
 }
 
-# Check arguments
+remove_site() {
+    local domain=$1
+    local webroot="/var/www/$domain"
+    local config_file="${domain}.conf"
+    
+    log_warn "⚠️  REMOVING SITE: $domain"
+    echo ""
+    echo "This will permanently delete:"
+    echo "  - Website files: $webroot"
+    echo "  - Nginx config: /etc/nginx/sites-available/$config_file"
+    echo "  - Nginx symlink: /etc/nginx/sites-enabled/$config_file"
+    echo "  - SSL certificate: /etc/letsencrypt/live/$domain"
+    echo "  - Local config: $config_file"
+    echo ""
+    
+    # Confirmation prompt
+    read -p "Are you sure? Type 'yes' to confirm: " confirm
+    if [ "$confirm" != "yes" ]; then
+        log_info "Removal cancelled"
+        exit 0
+    fi
+    
+    log_info "Removing nginx configuration for $domain..."
+    
+    # Disable site (remove symlink)
+    if [ -L "/etc/nginx/sites-enabled/$config_file" ]; then
+        sudo rm "/etc/nginx/sites-enabled/$config_file"
+        log_success "Disabled nginx site"
+    fi
+    
+    # Remove config file
+    if [ -f "/etc/nginx/sites-available/$config_file" ]; then
+        sudo rm "/etc/nginx/sites-available/$config_file"
+        log_success "Removed nginx config"
+    fi
+    
+    # Remove local config file
+    if [ -f "$config_file" ]; then
+        rm "$config_file"
+        log_success "Removed local config file"
+    fi
+    
+    # Remove SSL certificate
+    if [ -d "/etc/letsencrypt/live/$domain" ]; then
+        log_info "Removing SSL certificate for $domain..."
+        sudo certbot delete --cert-name "$domain" --non-interactive
+        if [ $? -eq 0 ]; then
+            log_success "Removed SSL certificate"
+        else
+            log_warn "Could not remove SSL certificate automatically"
+        fi
+    fi
+    
+    # Remove webroot directory
+    if [ -d "$webroot" ]; then
+        log_info "Removing website files at $webroot..."
+        sudo rm -rf "$webroot"
+        log_success "Removed website files"
+    fi
+    
+    # Test and reload nginx
+    if sudo nginx -t &> /dev/null; then
+        sudo systemctl reload nginx
+        log_success "Nginx configuration reloaded"
+    else
+        log_warn "Nginx configuration test failed - manual fix may be needed"
+    fi
+    
+    echo ""
+    log_success "🗑️  Site $domain completely removed!"
+    echo ""
+}
+
+check_site() {
+    local domain=$1
+    local webroot="/var/www/$domain"
+    local config_file="${domain}.conf"
+    
+    echo "🔍 CHECKING DOMAIN HEALTH: $domain"
+    echo ""
+    
+    local issues=0
+    
+    # Check DNS resolution
+    log_info "Checking DNS resolution..."
+    if dig +short "$domain" &> /dev/null || nslookup "$domain" &> /dev/null; then
+        local ip=$(dig +short "$domain" 2>/dev/null | head -1)
+        if [ -n "$ip" ]; then
+            log_success "DNS resolves to: $ip"
+        else
+            log_success "DNS resolution working"
+        fi
+    else
+        log_error "DNS resolution failed"
+        ((issues++))
+    fi
+    
+    # Check www DNS resolution
+    log_info "Checking www DNS resolution..."
+    if dig +short "www.$domain" &> /dev/null || nslookup "www.$domain" &> /dev/null; then
+        log_success "www.$domain DNS working"
+    else
+        log_warn "www.$domain DNS not configured"
+    fi
+    
+    # Check nginx config exists
+    log_info "Checking nginx configuration..."
+    if [ -f "/etc/nginx/sites-available/$config_file" ]; then
+        log_success "Nginx config exists"
+        
+        if [ -L "/etc/nginx/sites-enabled/$config_file" ]; then
+            log_success "Nginx site is enabled"
+        else
+            log_error "Nginx site not enabled"
+            ((issues++))
+        fi
+    else
+        log_error "Nginx config missing"
+        ((issues++))
+    fi
+    
+    # Check webroot exists
+    log_info "Checking webroot directory..."
+    if [ -d "$webroot" ]; then
+        log_success "Webroot exists: $webroot"
+        
+        if [ -f "$webroot/index.html" ]; then
+            log_success "index.html found"
+        else
+            log_warn "No index.html found in webroot"
+        fi
+    else
+        log_error "Webroot directory missing"
+        ((issues++))
+    fi
+    
+    # Check SSL certificate
+    log_info "Checking SSL certificate..."
+    if [ -d "/etc/letsencrypt/live/$domain" ]; then
+        log_success "SSL certificate exists"
+        
+        # Check certificate expiry
+        if command -v openssl &> /dev/null; then
+            local expiry=$(sudo openssl x509 -enddate -noout -in "/etc/letsencrypt/live/$domain/cert.pem" 2>/dev/null | cut -d= -f2)
+            if [ -n "$expiry" ]; then
+                log_success "Certificate expires: $expiry"
+            fi
+        fi
+    else
+        log_warn "No SSL certificate found"
+    fi
+    
+    # Check nginx service
+    log_info "Checking nginx service..."
+    if systemctl is-active --quiet nginx; then
+        log_success "Nginx service is running"
+    else
+        log_error "Nginx service not running"
+        ((issues++))
+    fi
+    
+    # Check nginx config validity
+    log_info "Testing nginx configuration..."
+    if sudo nginx -t &> /dev/null; then
+        log_success "Nginx configuration is valid"
+    else
+        log_error "Nginx configuration has errors"
+        ((issues++))
+    fi
+    
+    # Check HTTP response
+    log_info "Testing HTTP connection..."
+    if command -v curl &> /dev/null; then
+        local http_status=$(curl -s -o /dev/null -w "%{http_code}" "http://$domain" --max-time 10 2>/dev/null)
+        if [ "$http_status" = "301" ] || [ "$http_status" = "302" ]; then
+            log_success "HTTP redirects properly (status: $http_status)"
+        elif [ "$http_status" = "200" ]; then
+            log_success "HTTP responds (status: $http_status)"
+        else
+            log_error "HTTP connection failed (status: $http_status)"
+            ((issues++))
+        fi
+    else
+        log_warn "curl not available - cannot test HTTP"
+    fi
+    
+    # Check HTTPS response
+    log_info "Testing HTTPS connection..."
+    if command -v curl &> /dev/null; then
+        local https_status=$(curl -s -o /dev/null -w "%{http_code}" "https://$domain" --max-time 10 2>/dev/null)
+        if [ "$https_status" = "200" ]; then
+            log_success "HTTPS responds correctly (status: $https_status)"
+        else
+            log_error "HTTPS connection failed (status: $https_status)"
+            ((issues++))
+        fi
+    else
+        log_warn "curl not available - cannot test HTTPS"
+    fi
+    
+    # Check SSL certificate validity via online test
+    log_info "Testing SSL certificate validity..."
+    if command -v curl &> /dev/null; then
+        if curl -s --max-time 5 "https://$domain" > /dev/null 2>&1; then
+            log_success "SSL certificate is valid and trusted"
+        else
+            log_warn "SSL certificate may have issues"
+        fi
+    fi
+    
+    echo ""
+    echo "📊 HEALTH CHECK SUMMARY:"
+    echo "========================"
+    
+    if [ $issues -eq 0 ]; then
+        log_success "🎉 $domain is healthy! All checks passed."
+        echo ""
+        echo "🌐 URLs to test:"
+        echo "   http://$domain (should redirect to HTTPS)"
+        echo "   https://$domain (should work)"
+        echo "   https://www.$domain (should redirect to non-www)"
+    else
+        log_error "❌ $domain has $issues issue(s) that need attention."
+        echo ""
+        echo "💡 Common fixes:"
+        echo "   - DNS not pointing to server: Update A records"
+        echo "   - Nginx not running: sudo systemctl start nginx"
+        echo "   - Config errors: sudo nginx -t"
+        echo "   - Missing SSL: $0 --ssl $domain"
+    fi
+    
+    echo ""
+}
+
+get_domain_input() {
+    echo ""
+    echo "🌐 Enter domain name (e.g., example.com):"
+    read -p "> " domain_input
+    
+    # Remove http:// or https:// if present
+    domain_input=$(echo "$domain_input" | sed 's|https\?://||')
+    # Remove trailing slash if present
+    domain_input=$(echo "$domain_input" | sed 's|/$||')
+    # Remove www. if present (we'll handle www separately)
+    domain_input=$(echo "$domain_input" | sed 's|^www\.||')
+    
+    if [ -z "$domain_input" ]; then
+        log_error "Domain cannot be empty"
+        exit 1
+    fi
+    
+    # Basic domain validation
+    if [[ ! "$domain_input" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]+[a-zA-Z0-9]$ ]]; then
+        log_error "Invalid domain format: $domain_input"
+        exit 1
+    fi
+    
+    echo "$domain_input"
+}
+
+# Parse arguments
+FLAG=""
+DOMAIN=""
+
+# Check if no arguments or help requested
 if [ $# -eq 0 ] || [ "$1" = "--help" ]; then
     show_help
 fi
 
-if [ $# -ne 2 ]; then
-    log_error "Exactly 2 arguments required: flag and domain"
+# Parse all arguments
+i=0
+while [ $i -lt $# ]; do
+    i=$((i + 1))
+    arg=${!i}
+    
+    case $arg in
+        --domain=*)
+            DOMAIN="${arg#*=}"
+            ;;
+        -d)
+            # Next argument should be domain
+            i=$((i + 1))
+            if [ $i -le $# ]; then
+                DOMAIN=${!i}
+            else
+                log_error "-d flag requires domain argument"
+                show_help
+            fi
+            ;;
+        --conf|-c)
+            if [ -n "$FLAG" ]; then
+                log_error "Multiple action flags not allowed"
+                show_help
+            fi
+            FLAG="--conf"
+            ;;
+        --copy|-p)
+            if [ -n "$FLAG" ]; then
+                log_error "Multiple action flags not allowed"
+                show_help
+            fi
+            FLAG="--copy"
+            ;;
+        --enable|-e)
+            if [ -n "$FLAG" ]; then
+                log_error "Multiple action flags not allowed"
+                show_help
+            fi
+            FLAG="--enable"
+            ;;
+        --ssl|-s)
+            if [ -n "$FLAG" ]; then
+                log_error "Multiple action flags not allowed"
+                show_help
+            fi
+            FLAG="--ssl"
+            ;;
+        --all|-a)
+            if [ -n "$FLAG" ]; then
+                log_error "Multiple action flags not allowed"
+                show_help
+            fi
+            FLAG="--all"
+            ;;
+        --check|-k)
+            if [ -n "$FLAG" ]; then
+                log_error "Multiple action flags not allowed"
+                show_help
+            fi
+            FLAG="--check"
+            ;;
+        --remove|-r)
+            if [ -n "$FLAG" ]; then
+                log_error "Multiple action flags not allowed"
+                show_help
+            fi
+            FLAG="--remove"
+            ;;
+        --help|-h)
+            show_help
+            ;;
+        *)
+            log_error "Unknown argument: $arg"
+            show_help
+            ;;
+    esac
+done
+
+# Ensure we have an action flag
+if [ -z "$FLAG" ]; then
+    log_error "Action flag required (--all, --check, etc.)"
     show_help
 fi
 
-FLAG=$1
-DOMAIN=$2
+# Get domain if not provided
+if [ -z "$DOMAIN" ]; then
+    DOMAIN=$(get_domain_input)
+fi
+
+log_info "Processing domain: $DOMAIN"
 
 # Validate domain format
 if [[ ! "$DOMAIN" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$ ]]; then
@@ -373,8 +747,28 @@ case $FLAG in
         copy_config "$DOMAIN"
         enable_site "$DOMAIN"
         setup_ssl "$DOMAIN"
-        log_success "Site configured! Nginx should be running with SSL."
-        log_info "Visit: https://$DOMAIN"
+        echo ""
+        log_success "🎉 $DOMAIN is fully configured with nginx + SSL!"
+        echo ""
+        echo "📁 NEXT STEP: Add your website files"
+        echo "   Webroot: /var/www/$DOMAIN/"
+        echo ""
+        echo "   Quick test:"
+        echo "   sudo bash -c 'echo \"<h1>Hello World! 🚀</h1>\" > /var/www/$DOMAIN/index.html'"
+        echo ""
+        echo "   Upload files:"
+        echo "   sudo cp -r /path/to/your/website/* /var/www/$DOMAIN/"
+        echo "   sudo chown -R www-data:www-data /var/www/$DOMAIN/"
+        echo "   sudo chmod -R 755 /var/www/$DOMAIN/"
+        echo ""
+        echo "🌐 Visit: https://$DOMAIN"
+        echo ""
+        ;;
+    --check)
+        check_site "$DOMAIN"
+        ;;
+    --remove)
+        remove_site "$DOMAIN"
         ;;
     *)
         log_error "Unknown flag $FLAG"
