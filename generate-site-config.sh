@@ -53,6 +53,24 @@ check_prerequisites() {
     # Ensure nginx directories exist
     sudo mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
     
+    # Check for problematic existing configs
+    log_info "Checking for conflicting nginx configurations..."
+    if grep -r "ssl_certificate.*example.com" /etc/nginx/ 2>/dev/null; then
+        log_warn "Found configs referencing example.com SSL certificates (these will cause errors):"
+        grep -r "ssl_certificate.*example.com" /etc/nginx/ 2>/dev/null
+        log_warn "Consider removing these test/example configs before proceeding"
+    fi
+    
+    # Check if nginx main config exists and is valid
+    if [ ! -f /etc/nginx/nginx.conf ]; then
+        log_warn "Main nginx.conf missing, nginx may not work properly"
+    elif ! sudo nginx -t &> /dev/null; then
+        log_error "Existing nginx configuration has errors:"
+        sudo nginx -t
+        log_error "Fix existing nginx config errors before proceeding"
+        exit 1
+    fi
+    
     # Check if nginx is enabled to start on boot
     if ! systemctl is-enabled nginx &> /dev/null; then
         log_info "Enabling nginx to start on boot"
@@ -210,6 +228,22 @@ enable_site() {
         log_success "Nginx configuration test passed"
     else
         log_error "Nginx configuration test failed"
+        log_error "This may be caused by other nginx configs referencing missing SSL certificates"
+        log_info "Checking for SSL certificate references..."
+        
+        # Check what's causing the SSL error
+        if grep -r "ssl_certificate.*example.com" /etc/nginx/ 2>/dev/null; then
+            log_error "Found configs referencing example.com SSL certificates!"
+            log_error "Remove or fix these configs first:"
+            grep -r "ssl_certificate.*example.com" /etc/nginx/ 2>/dev/null
+        fi
+        
+        if grep -r "ssl_certificate" /etc/nginx/ 2>/dev/null | grep -v "$domain"; then
+            log_warn "Found other SSL certificate references that might be missing:"
+            grep -r "ssl_certificate" /etc/nginx/ 2>/dev/null | grep -v "$domain" | head -5
+        fi
+        
+        log_error "Full nginx test output:"
         sudo nginx -t
         exit 1
     fi
