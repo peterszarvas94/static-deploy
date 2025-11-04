@@ -15,19 +15,13 @@ Single script to setup static websites with:
 
 ## Quick Start
 
-Cloning to server:
+Clone the repo to the server:
 
 ```bash
 git clone https://github.com/peterszarvas94/static-deploy.git
 cd static-deploy
 chmod +x generate.sh
-sudo ./generate.sh --all -www
-```
-
-One-liner remote Installation:
-
-```bash
-wget -O - "https://raw.githubusercontent.com/peterszarvas94/static-deploy/refs/heads/master/generate.sh?$(date +%s)" | sudo bash -s -- --all --www
+sudo ./generate.sh --all --www
 ```
 
 ## How It Works
