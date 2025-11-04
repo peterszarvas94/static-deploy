@@ -129,29 +129,9 @@ server {
     server_name ${domain};
     ssl_certificate /etc/letsencrypt/live/${domain}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/${domain}/privkey.pem;
-    root ${webroot};
-    index index.html;
-    location / { try_files \$uri \$uri/ =404; }
-}
-EOF
-        else
-            # Template 1: HTTP-only with www redirect
-            cat > "$config_file" << EOF
-server {
-    listen 80;
-    server_name www.${domain};
-    location /.well-known/acme-challenge/ { root /var/www/certbot; }
-    location / { return 301 http://${domain}\$request_uri; }
-}
-
-server {
-    listen 80;
-    server_name ${domain};
-    location /.well-known/acme-challenge/ { root /var/www/certbot; }
-    location / {
         root ${webroot};
         index index.html;
-        try_files \$uri \$uri/ =404;
+        try_files \$uri \$uri/ \$uri/index.html =404;
     }
 }
 EOF
@@ -174,7 +154,7 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/${domain}/privkey.pem;
     root ${webroot};
     index index.html;
-    location / { try_files \$uri \$uri/ =404; }
+    location / { try_files \$uri \$uri/ \$uri/index.html =404; }
 }
 EOF
         else
@@ -187,7 +167,7 @@ server {
     location / {
         root ${webroot};
         index index.html;
-        try_files \$uri \$uri/ =404;
+        try_files \$uri \$uri/ \$uri/index.html =404;
     }
 }
 EOF
@@ -279,8 +259,8 @@ setup_ssl() {
         fi
     fi
     
-    # Create certbot directory
-    sudo mkdir -p /var/www/certbot
+    # Create certbot directory structure
+    sudo mkdir -p /var/www/certbot/.well-known/acme-challenge
     
     # Ensure nginx is running
     if ! systemctl is-active --quiet nginx; then
