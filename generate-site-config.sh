@@ -73,14 +73,14 @@ show_help() {
     echo "  --help,    -h    Show this help"
     echo "Domain Options:"
     echo "  --domain=example.com, -d example.com   Specify domain to work with"
-    echo "  (if not provided, you will be prompted to enter it)"
+    echo "  --www, -w                              Redirect www to non-www"
+    echo "  (if domain not provided, you will be prompted to enter it)"
     echo "Examples:"
-    echo "  $0 --all --domain=example.com     # Setup complete site"
-    echo "  $0 -a -d example.com              # Same as above (short flags)"
-    echo "  $0 --check --domain=example.com   # Verify site is working"
-    echo "  $0 -k -d example.com              # Same as above (short flags)"
-    echo "  $0 --all                          # Will prompt for domain"
-    echo "  $0 -a                             # Same as above (short flag)"
+    echo "  $0 --all --domain=example.com         # Setup site (both www and non-www work)"
+    echo "  $0 --all --www --domain=example.com   # Setup site (www redirects to non-www)"
+    echo "  $0 -a -w -d example.com               # Same as above (short flags)"
+    echo "  $0 --check --domain=example.com       # Verify site is working"
+    echo "  $0 --all                              # Will prompt for domain"
     echo "Prerequisites:"
     echo "  - Domain must point to this server's IP"
     echo "  - Ports 80 and 443 must be open"
@@ -93,32 +93,48 @@ generate_conf() {
     local webroot="/var/www/$domain"
     local config_file="${domain}.conf"
     
-    log_info "Generating HTTP-only config for $domain (SSL will be added after certificate generation)"
-    
-    cat > "$config_file" << EOF
-# HTTP config for ${domain} (before SSL)
+    if [ "$WWW_REDIRECT" = true ]; then
+        log_info "Generating HTTP config for $domain with www->non-www redirects"
+        
+        cat > "$config_file" << EOF
+# HTTP config for ${domain} with www redirect
 server {
     listen 80;
-    server_name ${domain} www.${domain};
-    
-    # Allow certbot challenges
-    location /.well-known/acme-challenge/ { 
-        root /var/www/certbot; 
-    }
-    
-    # Temporary: serve content over HTTP until SSL is ready
+    server_name www.${domain};
+    location /.well-known/acme-challenge/ { root /var/www/certbot; }
+    location / { return 301 http://${domain}\$request_uri; }
+}
+
+server {
+    listen 80;
+    server_name ${domain};
+    location /.well-known/acme-challenge/ { root /var/www/certbot; }
     location / {
-        # Redirect www to non-www
-        if (\$host = www.${domain}) {
-            return 301 http://${domain}\$request_uri;
-        }
         root ${webroot};
         index index.html;
         try_files \$uri \$uri/ =404;
     }
 }
 EOF
-    log_info "Generated HTTP-only ${config_file}"
+    else
+        log_info "Generating HTTP config for $domain (both www and non-www serve content)"
+        
+        cat > "$config_file" << EOF
+# HTTP config for ${domain} (both domains serve content)
+server {
+    listen 80;
+    server_name ${domain} www.${domain};
+    location /.well-known/acme-challenge/ { root /var/www/certbot; }
+    location / {
+        root ${webroot};
+        index index.html;
+        try_files \$uri \$uri/ =404;
+    }
+}
+EOF
+    fi
+    
+    log_info "Generated HTTP config ${config_file}"
 }
 
 generate_ssl_conf() {
@@ -126,10 +142,11 @@ generate_ssl_conf() {
     local webroot="/var/www/$domain"
     local config_file="${domain}.conf"
     
-    log_info "Updating config to HTTPS for $domain"
-    
-    cat > "$config_file" << EOF
-# HTTP -> HTTPS, www -> non-www for ${domain}
+    if [ "$WWW_REDIRECT" = true ]; then
+        log_info "Updating to HTTPS config for $domain with www->non-www redirects"
+        
+        cat > "$config_file" << EOF
+# HTTPS config for ${domain} with www redirect
 server {
     listen 80;
     server_name ${domain} www.${domain};
@@ -150,13 +167,35 @@ server {
     server_name ${domain};
     root ${webroot};
     index index.html;
-    
     ssl_certificate /etc/letsencrypt/live/${domain}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/${domain}/privkey.pem;
-    
     location / { try_files \$uri \$uri/ =404; }
 }
 EOF
+    else
+        log_info "Updating to HTTPS config for $domain (both www and non-www work)"
+        
+        cat > "$config_file" << EOF
+# HTTPS config for ${domain} (both domains serve content)
+server {
+    listen 80;
+    server_name ${domain} www.${domain};
+    location /.well-known/acme-challenge/ { root /var/www/certbot; }
+    location / { return 301 https://\$host\$request_uri; }
+}
+
+server {
+    listen 443 ssl;
+    server_name ${domain} www.${domain};
+    root ${webroot};
+    index index.html;
+    ssl_certificate /etc/letsencrypt/live/${domain}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${domain}/privkey.pem;
+    location / { try_files \$uri \$uri/ =404; }
+}
+EOF
+    fi
+    
     log_info "Updated to HTTPS config: ${config_file}"
 }
 
@@ -592,6 +631,7 @@ get_domain_input() {
 # Parse arguments
 FLAG=""
 DOMAIN=""
+WWW_REDIRECT=false
 
 # Check if no arguments or help requested
 if [ $# -eq 0 ] || [ "$1" = "--help" ]; then
@@ -666,6 +706,9 @@ while [ $i -lt $# ]; do
                 show_help
             fi
             FLAG="--remove"
+            ;;
+        --www|-w)
+            WWW_REDIRECT=true
             ;;
         --help|-h)
             show_help
