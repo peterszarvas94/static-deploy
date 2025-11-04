@@ -67,14 +67,59 @@ check_prerequisites() {
     log_info "Prerequisites checked (ignoring any existing nginx config issues)"
 }
 
+generate_ssl_challenge_conf() {
+    local domain=$1
+    local config_file="${domain}.conf"
+    
+    log_info "Generating temporary HTTP config for SSL challenge"
+    
+    if [ "$WWW_REDIRECT" = true ]; then
+        cat > "$config_file" << EOF
+server {
+    listen 80;
+    server_name ${domain} www.${domain};
+    location /.well-known/acme-challenge/ { 
+        root /var/www/certbot; 
+    }
+    location / { 
+        return 200 "SSL certificate setup in progress..."; 
+        add_header Content-Type text/plain;
+    }
+}
+EOF
+    else
+        cat > "$config_file" << EOF
+server {
+    listen 80;
+    server_name ${domain};
+    location /.well-known/acme-challenge/ { 
+        root /var/www/certbot; 
+    }
+    location / { 
+        return 200 "SSL certificate setup in progress..."; 
+        add_header Content-Type text/plain;
+    }
+}
+EOF
+    fi
+    
+    # Verify config file was created successfully
+    if [ ! -f "$config_file" ]; then
+        log_error "Failed to generate SSL challenge config file ${config_file}"
+        exit 1
+    fi
+    
+    log_info "Generated SSL challenge config ${config_file}"
+}
+
 show_help() {
     echo "Usage: $0 [ACTION] [--domain=example.com]"
     echo "Actions:"
-    echo "  --conf,    -c    Generate HTTP config file only"
+    echo "  --conf,    -c    Generate HTTPS config file (requires SSL certificates)"
     echo "  --copy,    -p    Create directory and copy config to nginx"
     echo "  --enable,  -e    Enable site in nginx"
     echo "  --ssl,     -s    Setup SSL certificate with certbot"
-    echo "  --all,     -a    Run all steps (conf + copy + enable + ssl)"
+    echo "  --all,     -a    Run all steps (ssl + conf + copy + enable)"
     echo "  --check,   -k    Check domain health (DNS, HTTP, HTTPS, SSL)"
     echo "  --remove,  -r    Remove site completely (webroot + config + SSL cert)"
     echo "  --help,    -h    Show this help"
@@ -99,23 +144,13 @@ generate_conf() {
     local domain=$1
     local webroot="/var/www/$domain"
     local config_file="${domain}.conf"
-    local ssl_exists=false
     
-    # Check if SSL certificates exist
-    if [ -f "/etc/letsencrypt/live/${domain}/fullchain.pem" ] && [ -f "/etc/letsencrypt/live/${domain}/privkey.pem" ]; then
-        ssl_exists=true
-    fi
-    
-    if [ "$ssl_exists" = true ]; then
-        log_info "Generating HTTPS config for $domain"
-    else
-        log_info "Generating HTTP-only config for $domain"
-    fi
+    log_info "Generating HTTPS config for $domain"
     
     if [ "$WWW_REDIRECT" = true ]; then
-        if [ "$ssl_exists" = true ]; then
-            # Template 1: HTTPS with www redirect
-            cat > "$config_file" << EOF
+        # Template 1: HTTPS with www → non-www redirect
+        log_info "Using template: HTTPS with www redirect"
+        cat > "$config_file" << EOF
 server {
     listen 80;
     server_name ${domain} www.${domain};
@@ -141,32 +176,10 @@ server {
     location / { try_files \$uri \$uri/ \$uri/index.html =404; }
 }
 EOF
-        else
-            # Template 1: HTTP-only with www redirect
-            cat > "$config_file" << EOF
-server {
-    listen 80;
-    server_name www.${domain};
-    location /.well-known/acme-challenge/ { root /var/www/certbot; }
-    location / { return 301 http://${domain}\$request_uri; }
-}
-
-server {
-    listen 80;
-    server_name ${domain};
-    location /.well-known/acme-challenge/ { root /var/www/certbot; }
-    location / {
-        root ${webroot};
-        index index.html;
-        try_files \$uri \$uri/ \$uri/index.html =404;
-    }
-}
-EOF
-        fi
     else
-        if [ "$ssl_exists" = true ]; then
-            # Template 2: HTTPS non-www only
-            cat > "$config_file" << EOF
+        # Template 2: HTTPS only (no www redirect)
+        log_info "Using template: HTTPS only"
+        cat > "$config_file" << EOF
 server {
     listen 80;
     server_name ${domain};
@@ -184,21 +197,6 @@ server {
     location / { try_files \$uri \$uri/ \$uri/index.html =404; }
 }
 EOF
-        else
-            # Template 2: HTTP-only non-www
-            cat > "$config_file" << EOF
-server {
-    listen 80;
-    server_name ${domain};
-    location /.well-known/acme-challenge/ { root /var/www/certbot; }
-    location / {
-        root ${webroot};
-        index index.html;
-        try_files \$uri \$uri/ \$uri/index.html =404;
-    }
-}
-EOF
-        fi
     fi
     
     # Verify config file was created successfully
@@ -736,11 +734,17 @@ case $FLAG in
         ;;
     --all)
         check_prerequisites
+        # Step 1: Create temporary HTTP config for SSL challenge
+        generate_ssl_challenge_conf "$DOMAIN"
+        copy_config "$DOMAIN"
+        enable_site "$DOMAIN"
+        # Step 2: Get SSL certificates
+        setup_ssl "$DOMAIN"
+        # Step 3: Generate final HTTPS config
         generate_conf "$DOMAIN"
         copy_config "$DOMAIN"
         enable_site "$DOMAIN"
-        setup_ssl "$DOMAIN"
-        log_info "SSL enabled for $DOMAIN!"
+        log_info "HTTPS site setup complete for $DOMAIN!"
         log_info "Copy your files to: /var/www/$DOMAIN/"
         log_info "Visit: https://$DOMAIN"
         ;;
