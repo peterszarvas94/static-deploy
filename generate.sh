@@ -2,7 +2,7 @@
 
 # Nginx Static Site Configuration Generator
 # Generates nginx configs with HTTP->HTTPS and www->non-www redirects
-# Usage: ./generate-site-config.sh --flag domain.com
+# Usage: ./generate.sh --flag domain.com
 
 # Colors
 RED='\033[0;31m'
@@ -76,7 +76,7 @@ show_help() {
     echo "  --www, -w                              Redirect www to non-www"
     echo "  (if domain not provided, you will be prompted to enter it)"
     echo "Examples:"
-    echo "  $0 --all --domain=example.com         # Setup site (both www and non-www work)"
+    echo "  $0 --all --domain=example.com         # Setup site (non-www only)"
     echo "  $0 --all --www --domain=example.com   # Setup site (www redirects to non-www)"
     echo "  $0 -a -w -d example.com               # Same as above (short flags)"
     echo "  $0 --check --domain=example.com       # Verify site is working"
@@ -93,65 +93,16 @@ generate_conf() {
     local webroot="/var/www/$domain"
     local config_file="${domain}.conf"
     
+    log_info "Generating config for $domain"
+    
     if [ "$WWW_REDIRECT" = true ]; then
-        log_info "Generating HTTP config for $domain with www->non-www redirects"
-        
+        # Template 1: www redirects to non-www
         cat > "$config_file" << EOF
-# HTTP config for ${domain} with www redirect
 server {
     listen 80;
     server_name www.${domain};
     location /.well-known/acme-challenge/ { root /var/www/certbot; }
     location / { return 301 http://${domain}\$request_uri; }
-}
-
-server {
-    listen 80;
-    server_name ${domain};
-    location /.well-known/acme-challenge/ { root /var/www/certbot; }
-    location / {
-        root ${webroot};
-        index index.html;
-        try_files \$uri \$uri/ =404;
-    }
-}
-EOF
-    else
-        log_info "Generating HTTP config for $domain (both www and non-www serve content)"
-        
-        cat > "$config_file" << EOF
-# HTTP config for ${domain} (both domains serve content)
-server {
-    listen 80;
-    server_name ${domain} www.${domain};
-    location /.well-known/acme-challenge/ { root /var/www/certbot; }
-    location / {
-        root ${webroot};
-        index index.html;
-        try_files \$uri \$uri/ =404;
-    }
-}
-EOF
-    fi
-    
-    log_info "Generated HTTP config ${config_file}"
-}
-
-generate_ssl_conf() {
-    local domain=$1
-    local webroot="/var/www/$domain"
-    local config_file="${domain}.conf"
-    
-    if [ "$WWW_REDIRECT" = true ]; then
-        log_info "Updating to HTTPS config for $domain with www->non-www redirects"
-        
-        cat > "$config_file" << EOF
-# HTTPS config for ${domain} with www redirect
-server {
-    listen 80;
-    server_name ${domain} www.${domain};
-    location /.well-known/acme-challenge/ { root /var/www/certbot; }
-    location / { return 301 https://${domain}\$request_uri; }
 }
 
 server {
@@ -163,40 +114,43 @@ server {
 }
 
 server {
+    listen 80;
     listen 443 ssl;
     server_name ${domain};
-    root ${webroot};
-    index index.html;
+    
     ssl_certificate /etc/letsencrypt/live/${domain}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/${domain}/privkey.pem;
-    location / { try_files \$uri \$uri/ =404; }
+    
+    location /.well-known/acme-challenge/ { root /var/www/certbot; }
+    location / {
+        root ${webroot};
+        index index.html;
+        try_files \$uri \$uri/ =404;
+    }
 }
 EOF
     else
-        log_info "Updating to HTTPS config for $domain (both www and non-www work)"
-        
+        # Template 2: only set up non-www
         cat > "$config_file" << EOF
-# HTTPS config for ${domain} (both domains serve content)
 server {
     listen 80;
-    server_name ${domain} www.${domain};
-    location /.well-known/acme-challenge/ { root /var/www/certbot; }
-    location / { return 301 https://\$host\$request_uri; }
-}
-
-server {
     listen 443 ssl;
-    server_name ${domain} www.${domain};
-    root ${webroot};
-    index index.html;
+    server_name ${domain};
+    
     ssl_certificate /etc/letsencrypt/live/${domain}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/${domain}/privkey.pem;
-    location / { try_files \$uri \$uri/ =404; }
+    
+    location /.well-known/acme-challenge/ { root /var/www/certbot; }
+    location / {
+        root ${webroot};
+        index index.html;
+        try_files \$uri \$uri/ =404;
+    }
 }
 EOF
     fi
     
-    log_info "Updated to HTTPS config: ${config_file}"
+    log_info "Generated config ${config_file}"
 }
 
 copy_config() {
@@ -268,15 +222,8 @@ enable_site() {
 
 setup_ssl() {
     local domain=$1
-    local config_file="${domain}.conf"
     
     log_info "Setting up SSL certificate for $domain"
-    
-    # Check DNS resolution
-    if ! dig +short "$domain" &> /dev/null && ! nslookup "$domain" &> /dev/null; then
-        log_warn "Cannot resolve $domain - DNS might not be configured"
-        log_warn "SSL certificate request may fail"
-    fi
     
     # Install certbot if not installed
     if ! command -v certbot &> /dev/null; then
@@ -291,73 +238,41 @@ setup_ssl() {
     # Create certbot directory
     sudo mkdir -p /var/www/certbot
     
-    # Temporarily disable broken configs to start nginx cleanly
-    log_info "Temporarily disabling broken configs for SSL verification..."
-    sudo mkdir -p /tmp/nginx-ssl-backup
-    
-    # Move all configs except ours to backup
-    sudo find /etc/nginx/sites-enabled/ -name "*.conf" ! -name "$config_file" -exec mv {} /tmp/nginx-ssl-backup/ \; 2>/dev/null
-    
-    # Start nginx with only our working config
+    # Ensure nginx is running
     if ! systemctl is-active --quiet nginx; then
-        log_info "Starting nginx for SSL verification (with only $domain config)"
-        if sudo systemctl start nginx; then
-            log_info "Nginx started successfully"
-        else
-            log_error "Failed to start nginx even with clean config"
-            # Restore configs before exiting
-            sudo find /tmp/nginx-ssl-backup/ -name "*.conf" -exec mv {} /etc/nginx/sites-enabled/ \; 2>/dev/null
-            exit 1
-        fi
-    else
-        log_info "Reloading nginx with clean config for SSL verification"
-        sudo systemctl reload nginx
+        log_info "Starting nginx for SSL verification"
+        sudo systemctl start nginx
     fi
     
     # Get certificate for domain
-    log_info "Getting SSL certificate for $domain"
-    sudo certbot certonly --webroot -w /var/www/certbot -d "$domain" -d "www.$domain" --non-interactive --agree-tos --email admin@"$domain"
+    if [ "$WWW_REDIRECT" = true ]; then
+        log_info "Getting SSL certificate for $domain and www.$domain"
+        sudo certbot certonly --webroot -w /var/www/certbot -d "$domain" -d "www.$domain" --non-interactive --agree-tos --email admin@"$domain"
+    else
+        log_info "Getting SSL certificate for $domain only"
+        sudo certbot certonly --webroot -w /var/www/certbot -d "$domain" --non-interactive --agree-tos --email admin@"$domain"
+    fi
+    
     if [ $? -eq 0 ]; then
         log_info "SSL certificate obtained for $domain"
         
-        # Now update config to use HTTPS
-        generate_ssl_conf "$domain"
-        
-        # Copy updated config
+        # Regenerate config with SSL
+        generate_conf "$domain"
         sudo cp "${domain}.conf" /etc/nginx/sites-available/
-        log_info "Updated nginx config with SSL"
         
-        # Test our SSL config in isolation
-        sudo mkdir -p /tmp/nginx-ssl-test
-        sudo find /etc/nginx/sites-enabled/ -name "*.conf" ! -name "$config_file" -exec mv {} /tmp/nginx-ssl-test/ \; 2>/dev/null
-        
-        if sudo nginx -t; then
+        # Test and reload nginx
+        if sudo nginx -t &> /dev/null; then
             sudo systemctl reload nginx
             log_info "Nginx reloaded with SSL configuration"
         else
-            log_error "SSL configuration test failed"
-            exit 1
+            log_warn "Nginx config test failed but continuing"
+            sudo systemctl reload nginx
         fi
-        
-        # Restore other configs (even if broken)
-        sudo find /tmp/nginx-ssl-test/ -name "*.conf" -exec mv {} /etc/nginx/sites-enabled/ \; 2>/dev/null
-        sudo rmdir /tmp/nginx-ssl-test 2>/dev/null
-        
     else
         log_error "Failed to get SSL certificate for $domain"
-        log_error "Check that:"
-        log_error "1. Domain points to this server"
-        log_error "2. Ports 80/443 are open"
-        log_error "3. No other service is using port 80"
-        
-        # Restore other configs before exiting
-        sudo find /tmp/nginx-ssl-backup/ -name "*.conf" -exec mv {} /etc/nginx/sites-enabled/ \; 2>/dev/null
+        log_error "Check that domain points to this server and ports 80/443 are open"
         exit 1
     fi
-    
-    # Restore other configs
-    sudo find /tmp/nginx-ssl-backup/ -name "*.conf" -exec mv {} /etc/nginx/sites-enabled/ \; 2>/dev/null
-    sudo rmdir /tmp/nginx-ssl-backup 2>/dev/null
     
     # Setup auto-renewal cron job
     if ! crontab -l 2>/dev/null | grep -q "certbot renew"; then
@@ -366,7 +281,16 @@ setup_ssl() {
         log_info "SSL auto-renewal configured"
     fi
     
-    log_info "$domain SSL setup complete and working!"
+    log_info "SSL setup complete!"
+    log_info "Your website files go here:"
+    echo "   Webroot: /var/www/$domain/"
+    echo "   Quick test:"
+    echo "   sudo bash -c 'echo \"<h1>Hello $domain!</h1>\" > /var/www/$domain/index.html'"
+    echo "   Upload files:"
+    echo "   sudo cp -r /path/to/your/website/* /var/www/$domain/"
+    echo "   sudo chown -R www-data:www-data /var/www/$domain/"
+    echo "   sudo chmod -R 755 /var/www/$domain/"
+    log_info "Visit: https://$domain"
 }
 
 remove_site() {

@@ -3,20 +3,25 @@
 ## Overview
 
 Single script to setup static websites with:
-
 - **Two-stage SSL deployment** - HTTP first, HTTPS after certificate generation
 - **HTTP → HTTPS redirects** - Automatic HTTPS enforcement
-- **www → non-www redirects** - Canonical domain handling
+- **Optional www → non-www redirects** - Use --www flag when needed
 - **Auto SSL certificate renewal** - Let's Encrypt with cron
 - **Automated nginx configuration** - Zero-config setup
 - **Fresh Ubuntu compatible** - Auto-installs dependencies
 
 ## Quick Start
 
-One-liner:
+One-liner (non-www only):
 
 ```bash
-wget -O - "https://raw.githubusercontent.com/peterszarvas94/static-deploy/refs/heads/master/generate-site-config.sh?$(date +%s)" | bash -s -- -a
+wget -O - "https://raw.githubusercontent.com/peterszarvas94/static-deploy/refs/heads/master/generate.sh?$(date +%s)" | bash -s -- -a
+```
+
+One-liner with www redirect:
+
+```bash
+wget -O - "https://raw.githubusercontent.com/peterszarvas94/static-deploy/refs/heads/master/generate.sh?$(date +%s)" | bash -s -- -a -w
 ```
 
 Or clone and run locally:
@@ -24,8 +29,18 @@ Or clone and run locally:
 ```bash
 git clone https://github.com/peterszarvas94/static-deploy.git
 cd static-deploy
-chmod +x generate-site-config.sh
-./generate-site-config.sh -a
+chmod +x generate.sh
+./generate.sh -a                    # non-www only
+./generate.sh -a -w                 # with www redirect
+```
+
+Or clone and run locally:
+
+```bash
+git clone https://github.com/peterszarvas94/static-deploy.git
+cd static-deploy
+chmod +x generate.sh
+./generate.sh -a
 ```
 
 ## How It Works
@@ -48,26 +63,25 @@ _Note: The script auto-installs nginx and certbot if missing_
 ### 1. Download and Run
 
 ```bash
-# Complete setup (recommended):
-./generate-site-config.sh --all --domain=example.com
+# Complete setup (non-www only):
+./generate.sh --all --domain=example.com
 # Or with short flags:
-./generate-site-config.sh -a -d example.com
+./generate.sh -a -d example.com
+
+# Complete setup with www redirect (www→non-www):
+./generate.sh --all --www --domain=example.com
+# Or with short flags:
+./generate.sh -a -w -d example.com
 
 # Interactive mode (will prompt for domain):
-./generate-site-config.sh --all
-./generate-site-config.sh -a
+./generate.sh --all
+./generate.sh -a
 
-# Or step by step:
-./generate-site-config.sh --conf --domain=example.com     # Generate HTTP config
-./generate-site-config.sh --copy --domain=example.com     # Create dir & copy to nginx
-./generate-site-config.sh --enable --domain=example.com   # Enable site (HTTP only)
-./generate-site-config.sh --ssl --domain=example.com      # Get SSL & update to HTTPS
-
-# Step by step with short flags:
-./generate-site-config.sh -c -d example.com     # Generate HTTP config
-./generate-site-config.sh -p -d example.com     # Create dir & copy to nginx
-./generate-site-config.sh -e -d example.com     # Enable site (HTTP only)
-./generate-site-config.sh -s -d example.com     # Get SSL & update to HTTPS
+# Step by step:
+./generate.sh --conf --domain=example.com     # Generate config
+./generate.sh --copy --domain=example.com     # Create dir & copy to nginx
+./generate.sh --enable --domain=example.com   # Enable site
+./generate.sh --ssl --domain=example.com      # Get SSL & update config
 ```
 
 ### 2. Deploy Your Website Files
@@ -105,31 +119,31 @@ sudo chown -R www-data:www-data /var/www/example.com/
 sudo chmod -R 755 /var/www/example.com/
 ```
 
-**Visit your site:** `https://example.com` - should show your content with SSL! 
+**Visit your site:** `https://example.com` - should show your content with SSL!
 
 ### 3. Multiple Sites
 
 ```bash
 # Run the script separately for each domain:
-./generate-site-config.sh --all --domain=site1.com
-./generate-site-config.sh --all --domain=site2.com
-./generate-site-config.sh --all --domain=site3.com
+./generate.sh --all --domain=site1.com
+./generate.sh --all --domain=site2.com
+./generate.sh --all --domain=site3.com
 
 # Or with short flags:
-./generate-site-config.sh -a -d site1.com
-./generate-site-config.sh -a -d site2.com
-./generate-site-config.sh -a -d site3.com
+./generate.sh -a -d site1.com
+./generate.sh -a -d site2.com
+./generate.sh -a -d site3.com
 
 # Or run multiple times in interactive mode:
-./generate-site-config.sh -a  # Will prompt: enter site1.com
-./generate-site-config.sh -a  # Will prompt: enter site2.com
-./generate-site-config.sh -a  # Will prompt: enter site3.com
+./generate.sh -a  # Will prompt: enter site1.com
+./generate.sh -a  # Will prompt: enter site2.com
+./generate.sh -a  # Will prompt: enter site3.com
 ```
 
 ## Script Flags
 
 ```bash
-./generate-site-config.sh [ACTION] [--domain=example.com]
+./generate.sh [ACTION] [--domain=example.com]
 ```
 
 **Available actions:**
@@ -146,32 +160,35 @@ sudo chmod -R 755 /var/www/example.com/
 | `--help`   | `-h`  | Show usage and prerequisites                         |
 
 **Domain options:**
-
 - `--domain=example.com` or `-d example.com` - Specify domain
+- `--www` or `-w` - Redirect www to non-www (optional)
 - If no domain provided, script will prompt for input
 
 **Examples:**
-
 ```bash
 # Show help
-./generate-site-config.sh --help
-./generate-site-config.sh -h
+./generate.sh --help
+./generate.sh -h
 
-# Complete setup
-./generate-site-config.sh --all --domain=example.com
-./generate-site-config.sh -a -d example.com
+# Complete setup (non-www only)
+./generate.sh --all --domain=example.com
+./generate.sh -a -d example.com
+
+# Complete setup with www redirect
+./generate.sh --all --www --domain=example.com
+./generate.sh -a -w -d example.com
 
 # Interactive mode
-./generate-site-config.sh --all    # Will prompt for domain
-./generate-site-config.sh -a       # Same, with short flag
+./generate.sh --all    # Will prompt for domain
+./generate.sh -a       # Same, with short flag
 
 # Health check
-./generate-site-config.sh --check --domain=example.com
-./generate-site-config.sh -k -d example.com
+./generate.sh --check --domain=example.com
+./generate.sh -k -d example.com
 
 # Remove site
-./generate-site-config.sh --remove --domain=example.com
-./generate-site-config.sh -r -d example.com
+./generate.sh --remove --domain=example.com
+./generate.sh -r -d example.com
 ```
 
 ## File Structure
