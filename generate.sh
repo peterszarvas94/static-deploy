@@ -104,7 +104,7 @@ generate_conf() {
     
     log_info "Generating HTTPS config for $domain"
     
-    # Find the correct SSL certificate path (could be domain or domain-0001, etc.)
+    # Find the correct SSL certificate path (prefer clean domain name, fallback to suffixed)
     for path in "/etc/letsencrypt/live/${domain}" "/etc/letsencrypt/live/${domain}-"*; do
         if [ -f "$path/fullchain.pem" ] && [ -f "$path/privkey.pem" ]; then
             ssl_path="$path"
@@ -276,13 +276,13 @@ setup_ssl() {
         sudo systemctl stop nginx
     fi
     
-    # Get certificate using standalone mode
+    # Get certificate using standalone mode with explicit cert name
     if [ "$WWW_REDIRECT" = true ]; then
         log_info "Getting SSL certificate for $domain and www.$domain"
-        sudo certbot certonly --standalone -d "$domain" -d "www.$domain" --expand --non-interactive --agree-tos --email admin@"$domain"
+        sudo certbot certonly --standalone --cert-name "$domain" -d "$domain" -d "www.$domain" --expand --non-interactive --agree-tos --email admin@"$domain"
     else
         log_info "Getting SSL certificate for $domain only"
-        sudo certbot certonly --standalone -d "$domain" --expand --non-interactive --agree-tos --email admin@"$domain"
+        sudo certbot certonly --standalone --cert-name "$domain" -d "$domain" --expand --non-interactive --agree-tos --email admin@"$domain"
     fi
     
     if [ $? -ne 0 ]; then
