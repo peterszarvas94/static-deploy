@@ -26,6 +26,13 @@ log_error() {
 check_prerequisites() {
     log_info "Checking system prerequisites..."
     
+    # Check if running with sudo or as root
+    if [ "$EUID" -ne 0 ] && ! sudo -n true 2>/dev/null; then
+        log_error "This script requires root privileges for nginx configuration."
+        log_error "Please run with: sudo $0 [your-arguments-here]"
+        exit 1
+    fi
+    
     # Install nginx if not present
     if ! command -v nginx &> /dev/null; then
         log_info "Nginx not found, installing..."
@@ -174,6 +181,12 @@ EOF
         fi
     fi
     
+    # Verify config file was created successfully
+    if [ ! -f "$config_file" ]; then
+        log_error "Failed to generate config file ${config_file}"
+        exit 1
+    fi
+    
     log_info "Generated config ${config_file}"
 }
 
@@ -198,8 +211,12 @@ copy_config() {
     sudo mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
     
     # Copy to nginx sites directory
-    sudo cp "$config_file" /etc/nginx/sites-available/
-    log_info "Copied config to nginx sites-available"
+    if sudo cp "$config_file" /etc/nginx/sites-available/; then
+        log_info "Copied config to nginx sites-available"
+    else
+        log_error "Failed to copy config to nginx sites-available"
+        exit 1
+    fi
 }
 
 enable_site() {
