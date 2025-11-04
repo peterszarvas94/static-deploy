@@ -307,9 +307,9 @@ setup_ssl() {
     else
         log_error "Failed to get SSL certificate for $domain"
         log_error "Check that:"
-        log_error "  1. Domain points to this server"
-        log_error "  2. Ports 80/443 are open"
-        log_error "  3. No other service is using port 80"
+        log_error "1. Domain points to this server"
+        log_error "2. Ports 80/443 are open"
+        log_error "3. No other service is using port 80"
         
         # Restore other configs before exiting
         sudo find /tmp/nginx-ssl-backup/ -name "*.conf" -exec mv {} /etc/nginx/sites-enabled/ \; 2>/dev/null
@@ -328,17 +328,6 @@ setup_ssl() {
     fi
     
     log_info "$domain SSL setup complete and working!"
-    
-    log_info "SSL enabled for $domain!"
-    log_info "Your website files go here:"
-    echo "        Webroot: /var/www/$domain/"
-    echo "       Quick test:"
-    echo "       sudo bash -c 'echo \"<h1>Hello $domain!</h1>\" > /var/www/$domain/index.html'"
-    echo "       Upload files:"
-    echo "       sudo cp -r /path/to/your/website/* /var/www/$domain/"
-    echo "       sudo chown -R www-data:www-data /var/www/$domain/"
-    echo "       sudo chmod -R 755 /var/www/$domain/"
-    log_info "Visit: https://$domain"
 }
 
 remove_site() {
@@ -348,11 +337,11 @@ remove_site() {
     
     log_warn "REMOVING SITE: $domain"
     log_warn "This will permanently delete:"
-    echo "        - Website files: $webroot"
-    echo "        - Nginx config: /etc/nginx/sites-available/$config_file"
-    echo "        - Nginx symlink: /etc/nginx/sites-enabled/$config_file"
-    echo "        - SSL certificate: /etc/letsencrypt/live/$domain"
-    echo "        - Local config: $config_file"
+    echo "- Website files: $webroot"
+    echo "- Nginx config: /etc/nginx/sites-available/$config_file"
+    echo "- Nginx symlink: /etc/nginx/sites-enabled/$config_file"
+    echo "- SSL certificate: /etc/letsencrypt/live/$domain"
+    echo "- Local config: $config_file"
     
     # Confirmation prompt
     read -p "Are you sure? Type 'yes' to confirm: " confirm
@@ -567,17 +556,17 @@ check_site() {
     if [ $issues -eq 0 ]; then
         log_info "$domain is healthy! All checks passed."
         log_info "URLs to test:"
-        echo "        http://$domain -> https://$domain"
-        echo "        http://www.$domain -> https://$domain"
-        echo "        https://$domain -> works"
-        echo "        https://www.$domain -> https://$domain"
+        echo "- https://$domain"
+        echo "- https://www.$domain -> https://$domain"
+        echo "- http://$domain -> https://$domain"
+        echo "- http://www.$domain -> https://$domain"
     else
         log_error "$domain has $issues issue(s) that need attention."
         log_info "Common fixes:"
-        echo "        - DNS not pointing to server: Update A records"
-        echo "        - Nginx not running: sudo systemctl start nginx"
-        echo "        - Config errors: sudo nginx -t"
-        echo "        - Missing SSL: $0 --ssl $domain"
+        echo "- DNS not pointing to server: Update A records"
+        echo "- Nginx not running: sudo systemctl start nginx"
+        echo "- Config errors: sudo nginx -t"
+        echo "- Missing SSL: $0 --ssl $domain"
     fi
     
 }
@@ -723,16 +712,9 @@ case $FLAG in
         copy_config "$DOMAIN"
         enable_site "$DOMAIN"
         setup_ssl "$DOMAIN"
-        log_info "$DOMAIN is fully configured with nginx + SSL!"
-        log_info "NEXT STEP: Add your website files"
-        echo "       Webroot: /var/www/$DOMAIN/"
-        echo "       Quick test:"
-        echo "       sudo bash -c 'echo \"<h1>Hello World!</h1>\" > /var/www/$DOMAIN/index.html'"
-        echo "       Upload files:"
-        echo "       sudo cp -r /path/to/your/website/* /var/www/$DOMAIN/"
-        echo "       sudo chown -R www-data:www-data /var/www/$DOMAIN/"
-        echo "       sudo chmod -R 755 /var/www/$DOMAIN/"
-        log_info "Visit: https://$DOMAIN"
+        log_info "SSL enabled for $domain!"
+        log_info "Copy your files to: /var/www/$domain/"
+        log_info "Visit: https://$domain"
         ;;
     --check)
         check_site "$DOMAIN"
