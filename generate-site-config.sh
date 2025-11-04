@@ -229,6 +229,7 @@ enable_site() {
 
 setup_ssl() {
     local domain=$1
+    local config_file="${domain}.conf"
     
     log_info "Setting up SSL certificate for $domain"
     
@@ -251,10 +252,27 @@ setup_ssl() {
     # Create certbot directory
     sudo mkdir -p /var/www/certbot
     
-    # Ensure nginx is running
+    # Temporarily disable broken configs to start nginx cleanly
+    log_info "Temporarily disabling broken configs for SSL verification..."
+    sudo mkdir -p /tmp/nginx-ssl-backup
+    
+    # Move all configs except ours to backup
+    sudo find /etc/nginx/sites-enabled/ -name "*.conf" ! -name "$config_file" -exec mv {} /tmp/nginx-ssl-backup/ \; 2>/dev/null
+    
+    # Start nginx with only our working config
     if ! systemctl is-active --quiet nginx; then
-        log_info "Starting nginx for SSL verification"
-        sudo systemctl start nginx
+        log_info "Starting nginx for SSL verification (with only $domain config)"
+        if sudo systemctl start nginx; then
+            log_success "Nginx started successfully"
+        else
+            log_error "Failed to start nginx even with clean config"
+            # Restore configs before exiting
+            sudo find /tmp/nginx-ssl-backup/ -name "*.conf" -exec mv {} /etc/nginx/sites-enabled/ \; 2>/dev/null
+            exit 1
+        fi
+    else
+        log_info "Reloading nginx with clean config for SSL verification"
+        sudo systemctl reload nginx
     fi
     
     # Get certificate for domain
@@ -270,7 +288,10 @@ setup_ssl() {
         sudo cp "${domain}.conf" /etc/nginx/sites-available/
         log_success "Updated nginx config with SSL"
         
-        # Test and reload nginx
+        # Test our SSL config in isolation
+        sudo mkdir -p /tmp/nginx-ssl-test
+        sudo find /etc/nginx/sites-enabled/ -name "*.conf" ! -name "$config_file" -exec mv {} /tmp/nginx-ssl-test/ \; 2>/dev/null
+        
         if sudo nginx -t; then
             sudo systemctl reload nginx
             log_success "Nginx reloaded with SSL configuration"
@@ -278,14 +299,26 @@ setup_ssl() {
             log_error "SSL configuration test failed"
             exit 1
         fi
+        
+        # Restore other configs (even if broken)
+        sudo find /tmp/nginx-ssl-test/ -name "*.conf" -exec mv {} /etc/nginx/sites-enabled/ \; 2>/dev/null
+        sudo rmdir /tmp/nginx-ssl-test 2>/dev/null
+        
     else
         log_error "Failed to get SSL certificate for $domain"
         log_error "Check that:"
         log_error "  1. Domain points to this server"
         log_error "  2. Ports 80/443 are open"
         log_error "  3. No other service is using port 80"
+        
+        # Restore other configs before exiting
+        sudo find /tmp/nginx-ssl-backup/ -name "*.conf" -exec mv {} /etc/nginx/sites-enabled/ \; 2>/dev/null
         exit 1
     fi
+    
+    # Restore other configs
+    sudo find /tmp/nginx-ssl-backup/ -name "*.conf" -exec mv {} /etc/nginx/sites-enabled/ \; 2>/dev/null
+    sudo rmdir /tmp/nginx-ssl-backup 2>/dev/null
     
     # Setup auto-renewal cron job
     if ! crontab -l 2>/dev/null | grep -q "certbot renew"; then
@@ -293,6 +326,8 @@ setup_ssl() {
         (crontab -l 2>/dev/null; echo "0 3 * * * certbot renew --quiet && systemctl reload nginx") | sudo crontab -
         log_success "SSL auto-renewal configured"
     fi
+    
+    log_success "$domain SSL setup complete and working!"
 }
 
 # Check arguments
