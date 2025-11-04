@@ -592,7 +592,7 @@ check_site() {
 
 get_domain_input() {
     echo ""
-    echo "🌐 Enter domain name (e.g., example.com):"
+    echo "🌐 Enter domain name:"
     read -p "> " domain_input
     
     # Remove http:// or https:// if present
@@ -604,12 +604,6 @@ get_domain_input() {
     
     if [ -z "$domain_input" ]; then
         log_error "Domain cannot be empty"
-        exit 1
-    fi
-    
-    # Basic domain validation
-    if [[ ! "$domain_input" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]+[a-zA-Z0-9]$ ]]; then
-        log_error "Invalid domain format: $domain_input"
         exit 1
     fi
     
@@ -713,14 +707,6 @@ fi
 # Get domain if not provided
 if [ -z "$DOMAIN" ]; then
     DOMAIN=$(get_domain_input)
-fi
-
-log_info "Processing domain: $DOMAIN"
-
-# Validate domain format
-if [[ ! "$DOMAIN" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$ ]]; then
-    log_error "Invalid domain format: $DOMAIN"
-    exit 1
 fi
 
 log_info "Processing domain: $DOMAIN"
