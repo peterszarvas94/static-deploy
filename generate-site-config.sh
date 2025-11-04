@@ -712,9 +712,9 @@ case $FLAG in
         copy_config "$DOMAIN"
         enable_site "$DOMAIN"
         setup_ssl "$DOMAIN"
-        log_info "SSL enabled for $domain!"
-        log_info "Copy your files to: /var/www/$domain/"
-        log_info "Visit: https://$domain"
+        log_info "SSL enabled for $DOMAIN!"
+        log_info "Copy your files to: /var/www/$DOMAIN/"
+        log_info "Visit: https://$DOMAIN"
         ;;
     --check)
         check_site "$DOMAIN"
