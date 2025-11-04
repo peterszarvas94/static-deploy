@@ -92,17 +92,28 @@ generate_conf() {
     local domain=$1
     local webroot="/var/www/$domain"
     local config_file="${domain}.conf"
+    local ssl_exists=false
     
-    log_info "Generating config for $domain"
+    # Check if SSL certificates exist
+    if [ -f "/etc/letsencrypt/live/${domain}/fullchain.pem" ] && [ -f "/etc/letsencrypt/live/${domain}/privkey.pem" ]; then
+        ssl_exists=true
+    fi
+    
+    if [ "$ssl_exists" = true ]; then
+        log_info "Generating HTTPS config for $domain"
+    else
+        log_info "Generating HTTP-only config for $domain"
+    fi
     
     if [ "$WWW_REDIRECT" = true ]; then
-        # Template 1: www redirects to non-www
-        cat > "$config_file" << EOF
+        if [ "$ssl_exists" = true ]; then
+            # Template 1: HTTPS with www redirect
+            cat > "$config_file" << EOF
 server {
     listen 80;
-    server_name www.${domain};
+    server_name ${domain} www.${domain};
     location /.well-known/acme-challenge/ { root /var/www/certbot; }
-    location / { return 301 http://${domain}\$request_uri; }
+    location / { return 301 https://${domain}\$request_uri; }
 }
 
 server {
@@ -114,32 +125,28 @@ server {
 }
 
 server {
-    listen 80;
     listen 443 ssl;
     server_name ${domain};
-    
     ssl_certificate /etc/letsencrypt/live/${domain}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/${domain}/privkey.pem;
-    
-    location /.well-known/acme-challenge/ { root /var/www/certbot; }
-    location / {
-        root ${webroot};
-        index index.html;
-        try_files \$uri \$uri/ =404;
-    }
+    root ${webroot};
+    index index.html;
+    location / { try_files \$uri \$uri/ =404; }
 }
 EOF
-    else
-        # Template 2: only set up non-www
-        cat > "$config_file" << EOF
+        else
+            # Template 1: HTTP-only with www redirect
+            cat > "$config_file" << EOF
 server {
     listen 80;
-    listen 443 ssl;
+    server_name www.${domain};
+    location /.well-known/acme-challenge/ { root /var/www/certbot; }
+    location / { return 301 http://${domain}\$request_uri; }
+}
+
+server {
+    listen 80;
     server_name ${domain};
-    
-    ssl_certificate /etc/letsencrypt/live/${domain}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/${domain}/privkey.pem;
-    
     location /.well-known/acme-challenge/ { root /var/www/certbot; }
     location / {
         root ${webroot};
@@ -148,6 +155,43 @@ server {
     }
 }
 EOF
+        fi
+    else
+        if [ "$ssl_exists" = true ]; then
+            # Template 2: HTTPS non-www only
+            cat > "$config_file" << EOF
+server {
+    listen 80;
+    server_name ${domain};
+    location /.well-known/acme-challenge/ { root /var/www/certbot; }
+    location / { return 301 https://${domain}\$request_uri; }
+}
+
+server {
+    listen 443 ssl;
+    server_name ${domain};
+    ssl_certificate /etc/letsencrypt/live/${domain}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${domain}/privkey.pem;
+    root ${webroot};
+    index index.html;
+    location / { try_files \$uri \$uri/ =404; }
+}
+EOF
+        else
+            # Template 2: HTTP-only non-www
+            cat > "$config_file" << EOF
+server {
+    listen 80;
+    server_name ${domain};
+    location /.well-known/acme-challenge/ { root /var/www/certbot; }
+    location / {
+        root ${webroot};
+        index index.html;
+        try_files \$uri \$uri/ =404;
+    }
+}
+EOF
+        fi
     fi
     
     log_info "Generated config ${config_file}"
