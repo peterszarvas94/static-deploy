@@ -591,9 +591,7 @@ check_site() {
 }
 
 get_domain_input() {
-    echo ""
-    echo "🌐 Enter domain name:"
-    read -p "> " domain_input
+    read -p "Domain name: " domain_input
     
     # Remove http:// or https:// if present
     domain_input=$(echo "$domain_input" | sed 's|https\?://||')
