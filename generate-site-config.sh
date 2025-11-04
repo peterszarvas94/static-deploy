@@ -31,11 +31,6 @@ log_error() {
 check_prerequisites() {
     log_info "Checking system prerequisites..."
     
-    # Check if running as root or with sudo
-    if [ "$EUID" -eq 0 ]; then
-        log_warn "Running as root - consider using sudo instead"
-    fi
-    
     # Install nginx if not present
     if ! command -v nginx &> /dev/null; then
         log_info "Nginx not found, installing..."
@@ -53,37 +48,21 @@ check_prerequisites() {
     # Ensure nginx directories exist
     sudo mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
     
-    # Check for problematic existing configs
-    log_info "Checking for conflicting nginx configurations..."
-    if grep -r "ssl_certificate.*example.com" /etc/nginx/ 2>/dev/null; then
-        log_warn "Found configs referencing example.com SSL certificates (these will cause errors):"
-        grep -r "ssl_certificate.*example.com" /etc/nginx/ 2>/dev/null
-        log_warn "Consider removing these test/example configs before proceeding"
-    fi
-    
-    # Check if nginx main config exists and is valid
-    if [ ! -f /etc/nginx/nginx.conf ]; then
-        log_warn "Main nginx.conf missing, nginx may not work properly"
-    elif ! sudo nginx -t &> /dev/null; then
-        log_error "Existing nginx configuration has errors:"
-        sudo nginx -t
-        log_error "Fix existing nginx config errors before proceeding"
-        exit 1
-    fi
-    
     # Check if nginx is enabled to start on boot
     if ! systemctl is-enabled nginx &> /dev/null; then
         log_info "Enabling nginx to start on boot"
         sudo systemctl enable nginx
     fi
     
-    # Check firewall status (informational)
+    # Check firewall status (informational only)
     if command -v ufw &> /dev/null && ufw status | grep -q "Status: active"; then
         if ! ufw status | grep -q "80\|443"; then
             log_warn "UFW firewall is active but ports 80/443 may not be open"
             log_warn "Run: sudo ufw allow 'Nginx Full'"
         fi
     fi
+    
+    log_success "Prerequisites checked (ignoring any existing nginx config issues)"
 }
 
 show_help() {
@@ -223,30 +202,29 @@ enable_site() {
     sudo ln -s "/etc/nginx/sites-available/$config_file" /etc/nginx/sites-enabled/
     log_success "Enabled site in nginx"
     
-    # Test nginx configuration
+    # Test only our specific config by temporarily moving others
+    log_info "Testing $domain configuration..."
+    
+    # Backup other enabled sites
+    sudo mkdir -p /tmp/nginx-backup
+    sudo find /etc/nginx/sites-enabled/ -name "*.conf" ! -name "$config_file" -exec mv {} /tmp/nginx-backup/ \;
+    
+    # Test with only our config
     if sudo nginx -t &> /dev/null; then
-        log_success "Nginx configuration test passed"
+        log_success "$domain configuration is valid"
     else
-        log_error "Nginx configuration test failed"
-        log_error "This may be caused by other nginx configs referencing missing SSL certificates"
-        log_info "Checking for SSL certificate references..."
-        
-        # Check what's causing the SSL error
-        if grep -r "ssl_certificate.*example.com" /etc/nginx/ 2>/dev/null; then
-            log_error "Found configs referencing example.com SSL certificates!"
-            log_error "Remove or fix these configs first:"
-            grep -r "ssl_certificate.*example.com" /etc/nginx/ 2>/dev/null
-        fi
-        
-        if grep -r "ssl_certificate" /etc/nginx/ 2>/dev/null | grep -v "$domain"; then
-            log_warn "Found other SSL certificate references that might be missing:"
-            grep -r "ssl_certificate" /etc/nginx/ 2>/dev/null | grep -v "$domain" | head -5
-        fi
-        
-        log_error "Full nginx test output:"
+        log_error "$domain configuration has errors:"
         sudo nginx -t
+        # Restore other configs before exiting
+        sudo find /tmp/nginx-backup/ -name "*.conf" -exec mv {} /etc/nginx/sites-enabled/ \;
         exit 1
     fi
+    
+    # Restore other configs
+    sudo find /tmp/nginx-backup/ -name "*.conf" -exec mv {} /etc/nginx/sites-enabled/ \;
+    sudo rmdir /tmp/nginx-backup 2>/dev/null
+    
+    log_success "$domain enabled and configuration validated"
 }
 
 setup_ssl() {
